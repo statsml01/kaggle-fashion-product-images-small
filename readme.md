@@ -67,19 +67,19 @@ print("Path to dataset files:", path)
 다음은 모델이 예측한 카테고리와 실제 라벨을 비교한 예시입니다:
 
 #### 예시 1
-![Sample 1](attachment:file-7CYq2uHRuASrHfkiRyCneA)
+![Sample 1](sample_1.png)
 
 #### 예시 2
-![Sample 2](attachment:file-RNzNWhjMH7tcWJZno4f2EH)
+![Sample 2](sample_2.png)
 
 #### 예시 3
-![Sample 3](attachment:file-3h1XXiWtnR4ZEwN93fLbSX)
+![Sample 3](sample_3.png)
 
 #### 예시 4
-![Sample 4](attachment:file-QzTCFzEhvZosz3KcYFUmpA)
+![Sample 4](sample_4.png)
 
 #### 예시 5
-![Sample 5](attachment:file-LbL4yDngF56QqrpddzZH1c)
+![Sample 5](sample_5.png)
 
 의견: 모델은 대부분의 카테고리를 정확히 예측하였으나, 일부 예측에서 오차가 발생하였습니다. 예를 들어, '사용 용도(usage)'와 '기본 색상(baseColour)'은 텍스트와 이미지 모두에서 분류가 까다로운 요소로 나타났습니다. 이를 개선하기 위해 추가적인 데이터 증강 또는 더 깊은 모델을 활용할 수 있습니다.
 
