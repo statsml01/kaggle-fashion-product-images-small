@@ -1,3 +1,4 @@
+from functools import partial
 import argparse
 import os
 import torch
@@ -6,6 +7,12 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import pandas as pd
+
+from transformers import BertModel, BertTokenizer
+from torchvision.models import resnet18
+
+from torchtext.data.utils import get_tokenizer
+from preprocess import text_pipeline, preprocess_image
 
 
 class ProductDataset(Dataset):
@@ -44,27 +51,30 @@ class ProductDataset(Dataset):
 
 
 class TextImageClassifier(nn.Module):
-    def __init__(self, num_classes_per_label, use_bert=False):
+    def __init__(self, num_classes_per_label, num_labels=7, use_bert=False):
         super(TextImageClassifier, self).__init__()
 
         self.use_bert = use_bert
-        self.num_classes_per_label = num_classes_per_label
-
-        # 텍스트 인코더
+        self.num_labels = num_labels
+        # 1. 텍스트 인코더
         if use_bert:
-            from transformers import BertModel, BertTokenizer
+            # BERT 기반 텍스트 인코더
             self.tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
             self.text_encoder = BertModel.from_pretrained("bert-base-uncased")
-            self.text_hidden_size = 768
+            self.text_hidden_size = 768  # BERT hidden size
         else:
+            # LSTM 기반 텍스트 인코더
             self.embedding = nn.Embedding(num_embeddings=10000, embedding_dim=128, padding_idx=0)
             self.lstm = nn.LSTM(input_size=128, hidden_size=256, num_layers=2, batch_first=True, bidirectional=True)
-            self.text_hidden_size = 256 * 2
+            self.text_hidden_size = 256 * 2  # Bidirectional LSTM
 
-        # 이미지 인코더
+        # 2. 이미지 인코더 (ResNet18)
         resnet = resnet18(pretrained=True)
-        self.image_encoder = nn.Sequential(*(list(resnet.children())[:-1]), nn.Flatten())
-        self.image_hidden_size = resnet.fc.in_features
+        self.image_encoder = nn.Sequential(
+            *(list(resnet.children())[:-1]),  # 마지막 FC Layer 제거
+            nn.Flatten()
+        )
+        self.image_hidden_size = resnet.fc.in_features  # ResNet18의 feature 크기
 
         # 레이블별 분류기
         self.classifiers = nn.ModuleList([
@@ -72,23 +82,28 @@ class TextImageClassifier(nn.Module):
                 nn.Linear(self.text_hidden_size + self.image_hidden_size, 512),
                 nn.ReLU(),
                 nn.Dropout(0.5),
-                nn.Linear(512, num_classes)
+                nn.Linear(512, num_classes)  # 각 레이블의 클래스 개수
             )
             for num_classes in num_classes_per_label
         ])
 
     def forward(self, text_input, image_input):
+        # 텍스트 인코딩
         if self.use_bert:
+            # BERT 인코더
             tokens = self.tokenizer(text_input, padding=True, truncation=True, max_length=50, return_tensors="pt")
             bert_output = self.text_encoder(**tokens)
-            text_features = bert_output.pooler_output
+            text_features = bert_output.pooler_output  # [CLS] 토큰의 출력
         else:
+            # LSTM 인코더
             embedded_text = self.embedding(text_input)
             lstm_output, _ = self.lstm(embedded_text)
-            text_features = lstm_output[:, -1, :]
+            text_features = lstm_output[:, -1, :]  # 마지막 Hidden State
 
         image_features = self.image_encoder(image_input)
+
         combined_features = torch.cat((text_features, image_features), dim=1)
+
         outputs = [classifier(combined_features) for classifier in self.classifiers]
         return outputs
 
@@ -103,27 +118,55 @@ def save_checkpoint(model, optimizer, epoch, loss, filename="checkpoint.pth"):
     torch.save(checkpoint, filename)
     print(f"Checkpoint saved at epoch {epoch+1}")
 
+# 텍스트 데이터 처리 함수
+
+
+# 패딩 적용
+
+
+def pad_sequence(sequences, max_len=50):
+    padded_sequences = torch.zeros((len(sequences), max_len), dtype=torch.int64)
+    for i, seq in enumerate(sequences):
+        seq = seq[:max_len]  # Max Length 자르기
+        padded_sequences[i, :len(seq)] = seq
+    return padded_sequences
+
 
 def load_checkpoint(filename):
     checkpoint = torch.load(filename)
     return checkpoint
 
 
+# Collate Function: 배치 내 패딩 처리
+
+
+def collate_fn(batch):
+    texts, images, targets = zip(*batch)
+    texts = pad_sequence(texts)  # 텍스트 패딩
+    images = torch.stack(images)  # 이미지 배치화
+    targets = torch.stack(targets)  # 타겟 배치화
+    return texts, images, targets
+
+
 def train_model(data_dir, checkpoint_file, num_epochs=3, batch_size=32, learning_rate=1e-4):
     # Device 설정
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
     # 데이터 로드
     train_data = pd.read_csv(os.path.join(data_dir, "train.csv"))
     vocab = torch.load(os.path.join(data_dir, "vocab.pth"))
-    label_encoders = torch.load(os.path.join(data_dir, "label_encoders.pth"))
-    train_dataset = ProductDataset(train_data, vocab)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    # 토큰화 및 Vocabulary 생성
+    tokenizer = get_tokenizer("basic_english")
+
+    train_dataset = ProductDataset(train_data, partial(
+        text_pipeline, vocab=vocab, tokenizer=tokenizer), preprocess_image)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
     # 모델 초기화
     target_columns = ['gender', 'masterCategory', 'subCategory', 'articleType', 'baseColour', 'season', 'usage']
-    num_classes_per_label = [train_data[col].nunique() for col in target_columns]
-    model = TextImageClassifier(num_labels=len(target_columns), use_bert=False).to(device)
+    num_classes_per_label = torch.load(os.path.join(args.data_dir, "num_classes_per_label.pth"))
+    model = TextImageClassifier(num_labels=len(target_columns),
+                                num_classes_per_label=num_classes_per_label, use_bert=False).to(device)
 
     # 손실 함수 및 옵티마이저 설정
     criteria = [nn.CrossEntropyLoss() for _ in range(len(num_classes_per_label))]
