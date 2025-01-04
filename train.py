@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import pandas as pd
 
+
 class ProductDataset(Dataset):
     def __init__(self, data, text_pipeline, image_transform):
         self.text_pipeline = text_pipeline
@@ -35,19 +36,20 @@ class ProductDataset(Dataset):
         image_tensor = self.image_transform(image_path)
 
         # 타겟 라벨
-        targets = self.data.iloc[idx][['gender', 'masterCategory', 'subCategory', 
+        targets = self.data.iloc[idx][['gender', 'masterCategory', 'subCategory',
                                        'articleType', 'baseColour', 'season', 'usage']].values.astype(int)
         target_tensor = torch.tensor(targets, dtype=torch.long)
 
         return text_tensor, image_tensor, target_tensor
-        
+
+
 class TextImageClassifier(nn.Module):
     def __init__(self, num_classes_per_label, use_bert=False):
         super(TextImageClassifier, self).__init__()
-        
+
         self.use_bert = use_bert
         self.num_classes_per_label = num_classes_per_label
-        
+
         # 텍스트 인코더
         if use_bert:
             from transformers import BertModel, BertTokenizer
@@ -58,12 +60,12 @@ class TextImageClassifier(nn.Module):
             self.embedding = nn.Embedding(num_embeddings=10000, embedding_dim=128, padding_idx=0)
             self.lstm = nn.LSTM(input_size=128, hidden_size=256, num_layers=2, batch_first=True, bidirectional=True)
             self.text_hidden_size = 256 * 2
-        
+
         # 이미지 인코더
         resnet = resnet18(pretrained=True)
         self.image_encoder = nn.Sequential(*(list(resnet.children())[:-1]), nn.Flatten())
         self.image_hidden_size = resnet.fc.in_features
-        
+
         # 레이블별 분류기
         self.classifiers = nn.ModuleList([
             nn.Sequential(
@@ -74,7 +76,7 @@ class TextImageClassifier(nn.Module):
             )
             for num_classes in num_classes_per_label
         ])
-        
+
     def forward(self, text_input, image_input):
         if self.use_bert:
             tokens = self.tokenizer(text_input, padding=True, truncation=True, max_length=50, return_tensors="pt")
@@ -84,12 +86,13 @@ class TextImageClassifier(nn.Module):
             embedded_text = self.embedding(text_input)
             lstm_output, _ = self.lstm(embedded_text)
             text_features = lstm_output[:, -1, :]
-        
+
         image_features = self.image_encoder(image_input)
         combined_features = torch.cat((text_features, image_features), dim=1)
         outputs = [classifier(combined_features) for classifier in self.classifiers]
         return outputs
-        
+
+
 def save_checkpoint(model, optimizer, epoch, loss, filename="checkpoint.pth"):
     checkpoint = {
         "model_state_dict": model.state_dict(),
@@ -100,14 +103,16 @@ def save_checkpoint(model, optimizer, epoch, loss, filename="checkpoint.pth"):
     torch.save(checkpoint, filename)
     print(f"Checkpoint saved at epoch {epoch+1}")
 
+
 def load_checkpoint(filename):
     checkpoint = torch.load(filename)
     return checkpoint
 
+
 def train_model(data_dir, checkpoint_file, num_epochs=3, batch_size=32, learning_rate=1e-4):
     # Device 설정
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+
     # 데이터 로드
     train_data = pd.read_csv(os.path.join(data_dir, "train.csv"))
     vocab = torch.load(os.path.join(data_dir, "vocab.pth"))
@@ -140,7 +145,7 @@ def train_model(data_dir, checkpoint_file, num_epochs=3, batch_size=32, learning
         model.train()
         running_loss = 0.0
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}", unit="batch")
-        
+
         for batch_texts, batch_images, batch_targets in progress_bar:
             # 데이터 전송
             batch_texts = batch_texts.to(device)
@@ -175,10 +180,12 @@ def train_model(data_dir, checkpoint_file, num_epochs=3, batch_size=32, learning
 
     print("Training complete.")
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the model.")
     parser.add_argument("--data_dir", type=str, required=True, help="Directory containing the preprocessed data.")
-    parser.add_argument("--checkpoint_file", type=str, default="model_checkpoint.pth", help="Path to save the model checkpoint.")
+    parser.add_argument("--checkpoint_file", type=str, default="model_checkpoint.pth",
+                        help="Path to save the model checkpoint.")
     parser.add_argument("--num_epochs", type=int, default=3, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training.")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate for training.")
