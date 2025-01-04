@@ -6,7 +6,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import pandas as pd
-from preprop import ProductDataset
+from preprocess import ProductDataset
 
 class TextImageClassifier(nn.Module):
     def __init__(self, num_classes_per_label, use_bert=False):
