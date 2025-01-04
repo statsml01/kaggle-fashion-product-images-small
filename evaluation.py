@@ -7,7 +7,13 @@ import pandas as pd
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
 import numpy as np
 import matplotlib.pyplot as plt
-from preprop import ProductDataset, TextImageClassifier
+from preprocess import text_pipeline,  preprocess_image
+from train import TextImageClassifier, ProductDataset, collate_fn
+
+from functools import partial
+
+from torchtext.data.utils import get_tokenizer
+
 
 def evaluate_model(model, test_loader, device):
     model.eval()
@@ -58,10 +64,14 @@ def evaluate_model(model, test_loader, device):
 
     print(f"Accuracy: {accuracy:.4f}, F1 Score: {f1:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}")
 
+
 def decode_labels(pred_ids, true_ids, label_encoders):
-    pred_labels = {col: label_encoders[col].inverse_transform([pred])[0] for col, pred in zip(label_encoders.keys(), pred_ids)}
-    true_labels = {col: label_encoders[col].inverse_transform([true])[0] for col, true in zip(label_encoders.keys(), true_ids)}
+    pred_labels = {col: label_encoders[col].inverse_transform(
+        [pred])[0] for col, pred in zip(label_encoders.keys(), pred_ids)}
+    true_labels = {col: label_encoders[col].inverse_transform(
+        [true])[0] for col, true in zip(label_encoders.keys(), true_ids)}
     return pred_labels, true_labels
+
 
 def visualize_predictions_with_text(model, test_loader, label_encoders, device, num_samples=5):
     model.eval()
@@ -107,6 +117,7 @@ def visualize_predictions_with_text(model, test_loader, label_encoders, device, 
 
                 samples_shown += 1
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate the model and visualize predictions.")
     parser.add_argument("--data_dir", type=str, required=True, help="Directory containing the preprocessed data.")
@@ -115,20 +126,29 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Device 설정
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
     # 데이터 로드
     test_data = pd.read_csv(os.path.join(args.data_dir, "test.csv"))
     vocab = torch.load(os.path.join(args.data_dir, "vocab.pth"))
     label_encoders = torch.load(os.path.join(args.data_dir, "label_encoders.pth"))
-    test_dataset = ProductDataset(test_data, vocab)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+    # 토큰화 및 Vocabulary 생성
+    tokenizer = get_tokenizer("basic_english")
+
+    test_dataset = ProductDataset(test_data, partial(
+        text_pipeline, vocab=vocab, tokenizer=tokenizer), preprocess_image)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, collate_fn=collate_fn)
 
     # 모델 로드
     target_columns = ['gender', 'masterCategory', 'subCategory', 'articleType', 'baseColour', 'season', 'usage']
-    num_classes_per_label = [test_data[col].nunique() for col in target_columns]
+    # num_classes_per_label = [test_data[col].nunique() for col in target_columns]
+    num_classes_per_label = torch.load(os.path.join(args.data_dir, "num_classes_per_label.pth"))
     model = TextImageClassifier(num_classes_per_label).to(device)
-    model.load_state_dict(torch.load(args.checkpoint_path))
+    # 체크포인트 로드
+    checkpoint = torch.load(args.checkpoint_path)
+    # 모델 파라미터 로드
+    model.load_state_dict(checkpoint["model_state_dict"])
+
     model.eval()
 
     # 평가
