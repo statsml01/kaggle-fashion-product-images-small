@@ -6,8 +6,41 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import pandas as pd
-from preprocess import ProductDataset
 
+class ProductDataset(Dataset):
+    def __init__(self, data, text_pipeline, image_transform):
+        self.text_pipeline = text_pipeline
+        self.image_transform = image_transform
+
+        # 이미지 경로가 유효한 데이터만 필터링
+        valid_indices = []
+        for idx, row in data.iterrows():
+            image_path = row['image_path']
+            if os.path.exists(image_path):  # 이미지 파일 존재 확인
+                valid_indices.append(idx)
+
+        # 유효한 데이터만 저장
+        self.data = data.loc[valid_indices].reset_index(drop=True)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        # 텍스트 처리
+        text = self.data.iloc[idx]['productDisplayName']
+        text_tensor = self.text_pipeline(text)
+
+        # 이미지 처리
+        image_path = self.data.iloc[idx]['image_path']
+        image_tensor = self.image_transform(image_path)
+
+        # 타겟 라벨
+        targets = self.data.iloc[idx][['gender', 'masterCategory', 'subCategory', 
+                                       'articleType', 'baseColour', 'season', 'usage']].values.astype(int)
+        target_tensor = torch.tensor(targets, dtype=torch.long)
+
+        return text_tensor, image_tensor, target_tensor
+        
 class TextImageClassifier(nn.Module):
     def __init__(self, num_classes_per_label, use_bert=False):
         super(TextImageClassifier, self).__init__()
