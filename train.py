@@ -8,6 +8,55 @@ from tqdm import tqdm
 import pandas as pd
 from preprop import ProductDataset
 
+class TextImageClassifier(nn.Module):
+    def __init__(self, num_classes_per_label, use_bert=False):
+        super(TextImageClassifier, self).__init__()
+        
+        self.use_bert = use_bert
+        self.num_classes_per_label = num_classes_per_label
+        
+        # 텍스트 인코더
+        if use_bert:
+            from transformers import BertModel, BertTokenizer
+            self.tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+            self.text_encoder = BertModel.from_pretrained("bert-base-uncased")
+            self.text_hidden_size = 768
+        else:
+            self.embedding = nn.Embedding(num_embeddings=10000, embedding_dim=128, padding_idx=0)
+            self.lstm = nn.LSTM(input_size=128, hidden_size=256, num_layers=2, batch_first=True, bidirectional=True)
+            self.text_hidden_size = 256 * 2
+        
+        # 이미지 인코더
+        resnet = resnet18(pretrained=True)
+        self.image_encoder = nn.Sequential(*(list(resnet.children())[:-1]), nn.Flatten())
+        self.image_hidden_size = resnet.fc.in_features
+        
+        # 레이블별 분류기
+        self.classifiers = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(self.text_hidden_size + self.image_hidden_size, 512),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(512, num_classes)
+            )
+            for num_classes in num_classes_per_label
+        ])
+        
+    def forward(self, text_input, image_input):
+        if self.use_bert:
+            tokens = self.tokenizer(text_input, padding=True, truncation=True, max_length=50, return_tensors="pt")
+            bert_output = self.text_encoder(**tokens)
+            text_features = bert_output.pooler_output
+        else:
+            embedded_text = self.embedding(text_input)
+            lstm_output, _ = self.lstm(embedded_text)
+            text_features = lstm_output[:, -1, :]
+        
+        image_features = self.image_encoder(image_input)
+        combined_features = torch.cat((text_features, image_features), dim=1)
+        outputs = [classifier(combined_features) for classifier in self.classifiers]
+        return outputs
+        
 def save_checkpoint(model, optimizer, epoch, loss, filename="checkpoint.pth"):
     checkpoint = {
         "model_state_dict": model.state_dict(),
